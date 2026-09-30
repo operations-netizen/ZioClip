@@ -28,6 +28,10 @@ jobs:
       - run: pnpm web exec next typegen
 
       - name: Typecheck
+        # tsc -b over the whole workspace exceeds Node's default ~2 GB heap on
+        # GitHub's runners (killed with "JavaScript heap out of memory").
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm typecheck
 
   unit-tests:

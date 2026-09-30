@@ -9,7 +9,11 @@ import {
 	unregisterMediaOperation,
 	withMediaOperation,
 } from "./media-operations";
-import { materializeStreamingInput } from "./media-video";
+import {
+	type FfmpegHlsCapabilities,
+	getFfmpegHlsCapabilities,
+	materializeStreamingInput,
+} from "./media-video";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { ensureTempDir, getTempDir } from "./temp-files";
 
@@ -129,20 +133,42 @@ function getAudioExtractArgs(
 	];
 }
 
-function getAudioProbeArgs(inputPath: string): string[] {
+const isHlsPath = (inputPath: string) =>
+	(inputPath.split("?")[0] ?? "").toLowerCase().endsWith(".m3u8");
+
+// `-allowed_segment_extensions` and `-extension_picky` only exist in newer
+// FFmpeg builds; older ones (such as the Debian package in the media server
+// image) reject unknown options, so pass them only when the HLS demuxer
+// supports them, as buildStreamingDownloadFfmpegArgs does.
+async function getAudioProbeHlsCapabilities(
+	inputPath: string,
+): Promise<FfmpegHlsCapabilities> {
+	const none = { allowedSegmentExtensions: false, extensionPicky: false };
+	if (!isHlsPath(inputPath)) return none;
+	try {
+		return await getFfmpegHlsCapabilities();
+	} catch {
+		return none;
+	}
+}
+
+function getAudioProbeArgs(
+	inputPath: string,
+	hls: FfmpegHlsCapabilities,
+): string[] {
 	const normalizedPath = (inputPath.split("?")[0] ?? "").toLowerCase();
 	const args = ["ffprobe", "-v", "error"];
 	if (normalizedPath.endsWith(".m3u8") || normalizedPath.endsWith(".mpd")) {
 		args.push("-protocol_whitelist", "file,http,https,tcp,tls,crypto,data");
 	}
-	if (normalizedPath.endsWith(".m3u8")) {
+	if (isHlsPath(inputPath)) {
 		args.push(
 			"-allowed_extensions",
 			"ALL",
-			"-allowed_segment_extensions",
-			"ALL",
-			"-extension_picky",
-			"0",
+			...(hls.allowedSegmentExtensions
+				? ["-allowed_segment_extensions", "ALL"]
+				: []),
+			...(hls.extensionPicky ? ["-extension_picky", "0"] : []),
 		);
 	}
 	args.push(
@@ -201,6 +227,7 @@ async function probeAudioTracks(
 	isCancelled: () => boolean,
 ): Promise<boolean> {
 	let lastError: Error | undefined;
+	const hlsCapabilities = await getAudioProbeHlsCapabilities(inputPath);
 
 	for (let attempt = 0; attempt < AUDIO_PROBE_MAX_ATTEMPTS; attempt++) {
 		if (isCancelled()) {
@@ -209,7 +236,7 @@ async function probeAudioTracks(
 
 		const proc = registerSubprocess(
 			spawn({
-				cmd: getAudioProbeArgs(inputPath),
+				cmd: getAudioProbeArgs(inputPath, hlsCapabilities),
 				stdout: "pipe",
 				stderr: "pipe",
 			}),
