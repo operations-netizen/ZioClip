@@ -1,0 +1,1 @@
+export const VIDEO_PROCESSING_MAX_ATTEMPTS = 4;

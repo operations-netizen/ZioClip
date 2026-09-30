@@ -1,0 +1,132 @@
+name: "CI"
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+# ZioClip ships the web app and media server only; the upstream desktop,
+# mobile and Rust jobs were removed.
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      - run: pnpm web exec next typegen
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+  unit-tests:
+    name: Unit tests (recorder-core, web)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Recorder core tests
+        run: pnpm --dir packages/recorder-core test
+
+      - name: Web unit tests
+        run: pnpm --dir apps/web test
+
+  media-server-tests:
+    name: Media server tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Test
+        working-directory: apps/media-server
+        run: bun test
+
+  web-build:
+    name: Web production build (clean)
+    runs-on: ubuntu-latest
+    # Placeholder values only: the build must not need real secrets or a
+    # database. The secret values double as canaries for the bundle scan.
+    # No NODE_ENV here: it would make `pnpm install` skip devDependencies;
+    # `next build` runs in production mode on its own.
+    env:
+      WEB_URL: https://recorder.example.com
+      NEXT_PUBLIC_WEB_URL: https://recorder.example.com
+      NEXTAUTH_URL: https://recorder.example.com
+      NEXTAUTH_SECRET: ci-placeholder-nextauth-secret-not-real-0001
+      DATABASE_URL: mysql://ci:ci-placeholder-db-password@127.0.0.1:3306/ci
+      DATABASE_ENCRYPTION_KEY: ci-placeholder-encryption-key-not-real-0002
+      CAP_AWS_BUCKET: ci-placeholder-bucket
+      CAP_AWS_REGION: us-east-1
+      CAP_AWS_ACCESS_KEY: ci-placeholder-access-key-0003
+      CAP_AWS_SECRET_KEY: ci-placeholder-secret-key-not-real-0004
+      MEDIA_SERVER_URL: http://127.0.0.1:3456
+      MEDIA_SERVER_WEBHOOK_SECRET: ci-placeholder-webhook-secret-0005
+      CRON_SECRET: ci-placeholder-cron-secret-not-real-0006
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      # No build cache is restored: every run compiles from scratch.
+      - name: Build from a clean state
+        run: |
+          rm -rf apps/web/.next
+          pnpm --dir apps/web build
+
+      - name: Client bundles contain no server secrets
+        run: node scripts/check-client-bundle-secrets.mjs apps/web/.next/static
+
+  format-biome:
+    name: Format (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          # Don't use `latest` as Biome throws an error when it doesn't match the
+          # schema version in the config file.
+          version: 2.2.0
+
+      - name: Run Biome
+        run: biome ci . --linter-enabled=false
+
+  lint-biome:
+    name: Lint (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome
+        run: biome ci . || true
