@@ -57,11 +57,26 @@ export const useRecordingTimer = () => {
 		}
 
 		timerRef.current = window.setInterval(() => {
-			if (startTimeRef.current !== null) {
-				syncDurationFromClock();
-			}
+			const startTime = startTimeRef.current;
+			if (startTime === null) return;
+			const now = performance.now();
+			const pausedPending =
+				pauseStartRef.current !== null ? now - pauseStartRef.current : 0;
+			const elapsed = Math.max(
+				0,
+				now - startTime - pausedDurationRef.current - pausedPending,
+			);
+			// The duration is shown in whole seconds, and this state lives at the
+			// top of the recorder, so every update re-renders the whole dialog
+			// (device menus included). Keep the previous value until the
+			// displayed second changes; pause/resume still sync exactly.
+			setDurationMs((previous) =>
+				Math.floor(previous / 1000) === Math.floor(elapsed / 1000)
+					? previous
+					: elapsed,
+			);
 		}, 250);
-	}, [syncDurationFromClock]);
+	}, []);
 
 	const resetTimer = useCallback(() => {
 		clearTimer();
